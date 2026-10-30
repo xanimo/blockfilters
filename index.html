@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dogecoin block filters</title>
+<meta name="description" content="Dogecoin has a BIP157 client, a BIP158 index and no node serving either. The case for merging compact block filters into Core, with a payment channel running in the browser as evidence.">
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+
+<nav>
+  <span class="brand">block filters</span>
+  <a href="./" aria-current="page">the case</a>
+  <a href="demo/">the channel</a>
+  <a href="https://github.com/dogecoin/dogecoin/pull/4031">the pull request</a>
+  <a href="https://github.com/xanimo/blockfilters">source</a>
+</nav>
+
+<main>
+
+<h1>to take a dogecoin payment without trusting anyone, you need a full node</h1>
+
+<p class="lede">a phone cannot carry 13.6 gb of utxo set, so light wallets ask a
+server instead, and that server learns which addresses are yours. you are
+choosing between running a machine you probably do not want to run and telling a
+stranger what you own.</p>
+
+<p>compact block filters are the fix for both halves of that. the node publishes
+a small summary of every block saying which scripts it touched, the wallet
+fetches summaries instead of blocks, and nobody has to be told which script was
+being looked for. bitcoin core has built the index since 0.19 and served it to
+peers since 0.21. dogecoin core has merged neither, so today every dogecoin
+light wallet either trusts a server or is not light.</p>
+
+<p>the second thing it unlocks is small payments. a channel lets you pay the
+same person over and over with nothing touching the chain until you are done, so
+a coffee, a tip, a second of a stream or a single api call stops costing a
+transaction and a confirmation wait. that only works if the person being paid
+can check the funding is real in the time it takes to hand over the coffee, and
+checking it is exactly what needs the filters. the two are the same problem
+wearing different clothes.</p>
+
+<div style="margin:2.5rem 0 1.25rem"><span class="zero">0</span>
+<div class="dim" style="margin-top:.4rem">third-party peers on dogecoin mainnet serving compact block filters. two probes
+on different days agree on it. payment-channel's prints <code>47/47 answered
+the handshake</code> and <code>1/47 advertise NODE_COMPACT_FILTERS</code>, that
+one the prober's own ip. koinu's threat model records 48 peers from the seeds,
+47 answering and none advertising bip158.</div></div>
+
+<p>three things were built separately and they meet at one question, which is
+whether a given output is in the chain, buried and unspent. a full node answers
+it instantly and carries that 13.6 gb to do it. a filter client answers it from
+a bounded range of blocks. nothing else answers it without trusting the person
+doing the paying, which is the one thing a payment protocol exists to avoid.</p>
+
+<p><a class="cta" href="demo/">run the channel in your browser</a></p>
+
+<p>koinu is the client. it is a dogecoin wallet written in c that syncs and
+verifies compact block filters rather than downloading blocks, so it can find
+the outputs that pay a script without a chain of its own and without telling a
+server which script it cares about. the part that matters for merging anything
+is that its on-disk record is not a new format, and you can settle that by
+reading two files rather than by trusting anyone's comparison.</p>
+
+<pre>core v0.21.0  src/index/blockfilterindex.cpp
+  fileout &lt;&lt; filter.GetBlockHash() &lt;&lt; filter.GetEncodedFilter();
+              32-byte hash          compactsize length, then the bytes
+
+koinu        net/cfstore.c:128-130
+  fwrite(block_hash, 1, 32, f);   wr_varint(f, flen);   fwrite(filter, 1, flen, f);
+              32-byte hash        compactsize length    then the bytes</pre>
+
+<p>koinu's <code>wr_varint</code> is bitcoin's compactsize to the byte: a single
+byte under <code>0xfd</code>, then <code>0xfd</code> and a little-endian
+uint16, <code>0xfe</code> and a uint32, <code>0xff</code> and a uint64. so the
+records are the same by construction, not by coincidence. one difference, which
+you would find yourself and should hear first: koinu tags a new file with four
+magic bytes at offset 0 and core's <code>fltr?????.dat</code> has no file header
+at all, so the records match and the files are offset by four bytes. the
+measured comparison below is of records.</p>
+
+<div class="facts">
+  <div class="fact"><b>14,894 / 14,894</b><span>records byte-identical to a real <code>fltr00000.dat</code>, 0 differing. the koinu author's measurement, not reproducible from this page</span></div>
+  <div class="fact"><b>6,430,357</b><span>mainnet filters synced from one bip157 node in about 11 minutes, ~9,750/s</span></div>
+  <div class="fact"><b>302.3 bytes</b><span>per filter, 1,943,712,170 bytes total. core's own cfilters.dat: 308.9</span></div>
+  <div class="fact"><b>100,000</b><span>filters chained anchor to anchor, reproduced in an independent implementation</span></div>
+</div>
+
+<p>payment-channel is an application that cannot work without the filters being
+served. it is a unidirectional channel: a customer funds a 2-of-2 with a
+timelocked refund, then pays the merchant as many times as they like off-chain,
+and only the last transaction is ever broadcast. the merchant signs nothing he
+has not checked, and every check he makes is local arithmetic except one. he
+cannot tell by himself whether the funding output is really on the chain, so he
+shells out to ask, and the customer is holding a socket open while that runs.
+the budget is three seconds.</p>
+
+<div class="facts">
+  <div class="fact"><b>3 seconds</b><span>the confirm budget, per customer, because the customer is waiting on the socket. <code>PC_CONFIRM_SECONDS</code>, <code>src/bob.c:309</code></span></div>
+  <div class="fact"><b>1 transaction</b><span>on chain per channel, however many payments were made across it</span></div>
+  <div class="fact"><b>383&ndash;385 bytes</b><span>per signed payment, none of which are broadcast; the refund is another 275</span></div>
+  <div class="fact"><b>512 mb</b><span>address-space cap per connection child, inherited through the fork and the exec. <code>CHILD_AS_BYTES</code>, <code>src/bob.c:129</code></span></div>
+  <div class="fact"><b>111 / 111</b><span>named cases across 13 suites, plus a regtest run against dogecoind v1.14.99</span></div>
+</div>
+
+<p>bip157 and bip158 are what make that three seconds possible. the node builds
+a small probabilistic filter per block describing which scripts it touched, the
+client fetches filters instead of blocks, and a bounded range of them answers
+"was this output paid, and has it been spent" without either side learning much.
+bitcoin core added the index in 0.19.0.1, which explicitly did not serve filters
+over p2p, and added serving in 0.21.0 behind
+<code>-blockfilterindex=1 -peerblockfilters=1</code>. dogecoin core has neither,
+so the client has the format right and nothing to talk to.</p>
+
+<div class="facts">
+  <div class="fact"><b>0 third-party</b><span>peers serving compact filters, in two probes on different days. 47/47 answered with one advertiser, the prober's own node; koinu's threat model has 47 of 48 answering and none advertising</span></div>
+  <div class="fact"><b>2 of 4</b><span>dogecoin dns seeds still returning addresses. <code>seed.dogecoin.wiki</code> is NXDOMAIN; <code>seed.dogecoin.com</code> answers authoritatively with none</span></div>
+  <div class="fact"><b>202,671,977</b><span>utxos in 13,636,287,062 bytes, which is what a full node carries to answer the same question. anyone with a synced node can check it with <code>gettxoutsetinfo</code></span></div>
+  <div class="fact"><b>684 mb</b><span>of header store at 6.4 m headers. 112 bytes a header is koinu's record size at <code>net/headers.h:87</code>, v0.5.0; the rest is multiplication</span></div>
+</div>
+
+<p>the filter path has a limit worth stating before someone finds it. koinu
+checks every filter against the serving peer's cfheaders chain and against
+filter-header anchors compiled into chainparams, 644 of them every 10000 blocks
+to 6430000 with a last at 6432061 (<code>KW_DOGE_MAINNET_CFCHECKPOINTS</code>,
+counted in the table rather than read off the prose, which disagreed with
+itself), so a peer serving a different filter set is caught at the first anchor
+it crosses. above the last anchor the base is still that peer's word, and koinu
+says so in its own threat model: compact filters are served by too few nodes to
+compare peers against each other, so it is an anchor table rather than a quorum.
+a merchant confirming through the filter path inside that window is trusting one
+peer not to omit a block. that is an argument for more nodes serving, which is
+the ask on this page, and it is why the documented backend is a node you run
+yourself.</p>
+
+<p>re-running that probe is harder than it was. two of the four seeds it asks
+are gone, and <code>seed.multidoge.org</code> is a delegation to a seeder daemon
+rather than a record, so a resolver that will not follow it returns nothing:
+<code>8.8.8.8</code> gives zero addresses for it today while
+<code>1.1.1.1</code> and <code>9.9.9.9</code> both give 25. a sceptic who runs
+<code>contrib/probe-filters.py</code> on a google resolver gets an empty set and
+concludes the tool is broken rather than that the seeds have decayed.</p>
+
+<p>the shape of the question, and the exit codes that are the whole contract
+between the merchant and whatever he asks:</p>
+
+<pre>bob: kw outpoint --daemon /run/kwd.sock --watch 2NFrH5n… --outpoint a109176…:0 --since 400
+     unspent height 381 depth 6 value 10000000000 koinu   &rarr; ship the goods
+     exit 3                                               &rarr; refuse, it is not there
+     exit 4                                               &rarr; refuse, it did not look far enough back</pre>
+
+<p>on provenance, since the whole point of a page like this is that it survives
+being checked. the channel numbers come from this repository and from
+payment-channel's own suite, and the commands that produce them are on
+<a href="demo/">the demo page</a>. the record format above is two source files you can read, named with the
+version and line they were read at so a correction upstream shows up here as a
+stale citation rather than as a number nobody rechecks. the pruning refusal, the seed decay and the resolver split were
+measured here and each one names the command. the six filter measurements are
+the koinu author's, taken on mainnet against a node we do not control, and
+nothing on this page lets you re-derive them: they are quoted because the
+structural claim they support can be checked independently, not as a substitute
+for it. there are no performance numbers for the pull request itself, measured
+or estimated, because none have been taken.</p>
+
+<p>so the ask is to serve bip157 and bip158 from dogecoin core the way core
+upstream already does. an operator who turns it on pays for the index, and it is
+incompatible with pruning: dogecoind refuses to start with both, with "Prune mode is incompatible with -blockfilterindex". everyone running a light client stops needing a full
+node in order to accept a payment, and the format they read is the one core
+already writes.</p>
+
+<p>that is <a href="https://github.com/dogecoin/dogecoin/pull/4031">pull request #4031</a>,
+open since 27 july 2026 with no review on it and no conflicts against master.
+it asks for two things rather than one. alongside the filters it carries a
+chainstate migration: the utxo set moves from one record per transaction to one
+record per unspent output, upgrading in place on first start, and undo files it
+writes cannot be read by earlier versions, so downgrading after it connects a
+block needs a full <code>-reindex</code>. <code>src/txdb.cpp</code> carries both
+the new <code>DB_COIN</code> and the legacy <code>DB_COINS</code>, which is the
+migration in the code rather than in the notes. that is the larger ask by some
+distance, and bundling the two explains three months of silence better than
+disinterest does. the filter half is the half this page is about.</p>
+
+<p><a class="cta" href="https://github.com/dogecoin/dogecoin/pull/4031">read the pull request</a>
+<a class="cta ghost" href="demo/">or run the channel first</a></p>
+
+</main>
+
+<footer>
+<p>filter measurements are the koinu author's, taken on mainnet; the serving
+node is identified only as one node, deliberately. the channel numbers are from
+this repository's own suite and a regtest run. everything on
+<a href="demo/">the demo page</a> is compiled from the c in
+<a href="https://github.com/xanimo/payment-channel">payment-channel</a> and runs
+in your browser.</p>
+</footer>
+
+</body>
+</html>
