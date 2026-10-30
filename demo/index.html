@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>the channel, running here</title>
+<meta name="description" content="payment-channel's C compiled to WebAssembly: real secp256k1 signatures, real transactions, and the refusals a merchant depends on.">
+<link rel="stylesheet" href="../site.css">
+</head>
+<body>
+
+<nav>
+  <span class="brand">block filters</span>
+  <a href="../">the case</a>
+  <a href="./" aria-current="page">the channel</a>
+  <a href="https://github.com/dogecoin/dogecoin/pull/4031">the pull request</a>
+  <a href="https://github.com/xanimo/blockfilters">source</a>
+</nav>
+
+<main>
+
+<h1>the channel, running here</h1>
+
+<p class="lede">this is payment-channel's c compiled to webassembly: channel.c,
+txcheck.c, envelope.c and koinu's crypto, linked against libsecp256k1. the keys
+are generated in your tab, the signatures are real ecdsa, and the transactions
+are serialized by the code that produces the ones the daemon broadcasts. the
+javascript decides what to call and computes nothing.</p>
+
+<div id="demo">
+
+  <div class="channel">
+    <div class="meter"><div id="bar-bob"></div></div>
+    <div class="meterlabels">
+      <span><b id="v-bob">0 DOGE</b> paid to bob</span>
+      <span><b id="v-alice">0 DOGE</b> still alice's</span>
+      <span><b id="v-cap">—</b> capacity</span>
+      <span><b id="v-onchain">0</b> transactions on chain</span>
+    </div>
+  </div>
+
+  <div class="row">
+    <button id="open" class="primary" disabled>open a channel</button>
+    <span class="sep"></span>
+    <label for="amount" class="dim">pay bob</label>
+    <input id="amount" type="number" value="5" min="0" step="0.5" disabled>
+    <button id="pay" disabled>send</button>
+    <button data-amt="0.1" disabled class="chip">+0.1</button>
+    <button data-amt="5" disabled class="chip">+5</button>
+    <button data-amt="25" disabled class="chip">+25</button>
+    <span class="sep"></span>
+    <button id="close" disabled>settle on chain</button>
+  </div>
+
+  <div class="row">
+    <span class="dim">what bob refuses:</span>
+    <button id="atk-replay" disabled>replay an old payment</button>
+    <button id="atk-overclaim" disabled>claim more than it pays</button>
+    <button id="atk-capacity" disabled>spend past the capacity</button>
+  </div>
+
+  <pre id="log">loading the wasm module…</pre>
+</div>
+
+<p>pay bob as many times as you like. each one is a complete transaction alice
+signs and bob verifies and countersigns, and none of them go anywhere. only the
+last one needs to be broadcast, which is what settle does, so a thousand
+payments still cost one transaction and one fee.</p>
+
+<p>the three refusals are the reason bob can accept a payment without trusting
+alice. a replayed payment is caught by <code>claimed &lt;= paid_to_bob</code> in
+<code>pc_payment_accept</code>, which is the whole of the ratchet: bob keeps the
+highest payment he has seen and nothing earlier displaces it. a transaction that
+pays five while claiming thirty is caught by <code>pc_tx_verify_payment</code>,
+which reads the outputs out of the raw bytes rather than believing the message
+that carried them. and a payment past the capacity cannot be built at all,
+because the capacity came out of the funding transaction bob parsed himself.</p>
+
+<p>what the page cannot do is reach a chain, and that is the point. the funding
+transaction is built locally the way <code>test/mkfunding</code> builds it, a
+real serialization over a dummy input, so the txid and the sighash are computed
+over real bytes. whether it was ever mined is exactly what
+<code>--confirm-cmd</code> exists to ask, and no amount of browser code answers
+it. a merchant needs a peer that will tell him an output is buried and unspent
+inside three seconds, without handing him the whole chain, and
+<a href="../">no node on dogecoin mainnet serves the filters that make that
+cheap</a>, because <a href="https://github.com/dogecoin/dogecoin/pull/4031">the pull request that would serve them</a> is
+still open.</p>
+
+<p>the same calls run outside any browser, if you would rather not take the
+page's word for it:</p>
+
+<pre>git clone https://github.com/xanimo/blockfilters
+cd blockfilters &amp;&amp; node build/smoke.js</pre>
+
+<p>it prints the channel address, the funding outpoint, three countersigned
+transactions with their byte lengths, a replayed payment being refused and the
+refund. <code>build.sh</code> rebuilds the wasm from a payment-channel checkout
+if you would rather not trust the committed binary.</p>
+
+</main>
+
+<footer>
+<p>built from <a href="https://github.com/xanimo/payment-channel">payment-channel</a>
+with emscripten. the page is checked by clicking its own buttons in headless
+chrome, so what it prints is what the c returned.</p>
+</footer>
+
+<script src="pc.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
